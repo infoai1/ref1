@@ -3,41 +3,49 @@ from io import BytesIO
 import streamlit as st
 from docx import Document
 
-st.set_page_config(page_title="DOCX: Inline full references from Notes", page_icon="📚")
-st.title("DOCX → Replace superscripts with full reference text")
+st.set_page_config(page_title="DOCX: Inline full refs for whole book", page_icon="📚")
+st.title("Inline full references for the whole DOCX (all chapters)")
 
 fmt = st.selectbox(
     "Inline format",
-    [
-        "(Reference text)",
-        "— 1. Reference text",
-        "[1. Reference text]"
-    ],
-    index=1,
-    help="How the inserted reference should look. For 2+ citations, items are joined with '; '.",
+    ["— 1. Reference text", "[1. Reference text]", "(Reference text)"],
+    index=0,
 )
+delete_notes = st.checkbox("Delete Notes/References sections after inlining", value=False)
+uploaded = st.file_uploader("Upload the full book .docx", type=["docx"])
 
-delete_notes = st.checkbox("Delete Notes sections after inlining", value=False)
-uploaded = st.file_uploader("Upload a .docx chapter (with a 'Notes' section)", type=["docx"])
+# ---- helpers ----
+HEADING_RE = re.compile(r"^\s*(notes?|references|endnotes?|sources)\s*:?\s*$", re.I)
 
-# -------- helpers --------
-def all_paragraphs(doc):
-    # linear order: body paragraphs only (tables rarely used for narrative text)
+def para_iter(doc):
+    # paragraphs in body + tables (recursive)
     for p in doc.paragraphs:
         yield p
+    for t in doc.tables:
+        yield from table_para_iter(t)
+
+def table_para_iter(table):
+    for row in table.rows:
+        for cell in row.cells:
+            for p in cell.paragraphs:
+                yield p
+            for t2 in cell.tables:
+                yield from table_para_iter(t2)
 
 def is_notes_heading(p):
-    return p.text.strip().lower() == "notes"
+    return bool(HEADING_RE.match(p.text or ""))
 
-def next_heading_index(paragraphs, start_i):
-    # stop Notes when we hit a Heading or another 'Notes' or two consecutive blanks
+def is_heading_style(p):
+    name = (getattr(p.style, "name", "") or "").lower()
+    return name.startswith("heading")
+
+def next_block_end(paragraphs, start):
     blanks = 0
-    for j in range(start_i, len(paragraphs)):
+    for j in range(start, len(paragraphs)):
         pj = paragraphs[j]
         if is_notes_heading(pj):
             return j
-        name = getattr(pj.style, "name", "") or ""
-        if name.lower().startswith("heading") and pj.text.strip() != "":
+        if is_heading_style(pj) and pj.text.strip():
             return j
         if pj.text.strip() == "":
             blanks += 1
@@ -47,125 +55,124 @@ def next_heading_index(paragraphs, start_i):
             blanks = 0
     return len(paragraphs)
 
-def strip_leading_number(s):
-    # handles "1. ", "2) ", "[3] ", "3 – ", "3- "
+def strip_leading_num(s):
     m = re.match(r"^\s*(\d+)[\.\)\]\-–—:]?\s*(.*)$", s.strip())
     if m:
         return int(m.group(1)), m.group(2).strip()
     return None, s.strip()
 
-def parse_notes_block(paragraphs, start, end):
-    """Return dict {num: full_text} from Notes block paragraphs[start:end]."""
-    refmap = {}
-    expected = 1
+def parse_notes(paragraphs, start, end):
+    refmap, expected = {}, 1
     for p in paragraphs[start:end]:
-        text = p.text.strip()
-        if not text:
+        txt = (p.text or "").strip()
+        if not txt:
             continue
-        n, rest = strip_leading_number(text)
+        n, rest = strip_leading_num(txt)
         if n is None:
-            # numbering might be Word automatic; assign sequential number
-            n = expected
-            rest = text
+            n, rest = expected, txt
         refmap[n] = rest
         expected = n + 1
     return refmap
 
-def build_all_blocks(paragraphs):
-    """Find each Notes block and return list of tuples:
-       (body_start, body_end, notes_start, notes_end, refmap)
-       body range is the text to transform using that block's refs."""
-    idxs = [i for i,p in enumerate(paragraphs) if is_notes_heading(p)]
-    blocks = []
-    prev_end = 0
-    for i in idxs:
-        notes_start = i + 1
-        notes_end = next_heading_index(paragraphs, notes_start)
-        refmap = parse_notes_block(paragraphs, notes_start, notes_end)
-        blocks.append((prev_end, i, notes_start, notes_end, refmap))
-        prev_end = notes_end
-    # trailing body after last Notes (rare) -> no mapping
-    return blocks
+def expand_nums(token_str):
+    s = token_str.replace("–", "-").replace("—", "-")
+    out = []
+    for part in re.split(r"[,\s]+", s):
+        if not part:
+            continue
+        if "-" in part:
+            a,b = part.split("-",1)
+            if a.isdigit() and b.isdigit():
+                out.extend(range(int(a), int(b)+1))
+        elif part.isdigit():
+            out.append(int(part))
+    return out
 
-def render_inline(num, text, style):
-    if style.startswith("("):
-        return f" ({text})"
+def render(num, text, style):
     if style.startswith("—"):
         return f" — {num}. {text}"
-    # bracket style
-    return f" [{num}. {text}]"
+    if style.startswith("["):
+        return f" [{num}. {text}]"
+    return f" ({text})"
 
-def replace_superscripts_in_range(paragraphs, start, end, refmap, style):
+def replace_in_body(paragraphs, start, end, refmap, style):
     changed = 0
-    for pi in range(start, end):
-        p = paragraphs[pi]
+    for i in range(start, end):
+        p = paragraphs[i]
         if is_notes_heading(p):
             continue
-        # Replace true superscripts first (preserves other formatting)
+        # superscript runs
         for r in p.runs:
             if getattr(r.font, "superscript", None):
-                nums = re.findall(r"\d+", r.text)
-                if not nums:
-                    continue
-                parts = []
-                for nstr in nums:
-                    n = int(nstr)
-                    txt = refmap.get(n)
-                    if txt:
-                        parts.append(render_inline(n, txt, style).lstrip())
-                    else:
-                        # fallback: keep original number if not found
-                        parts.append(f"[{n}]")
-                r.font.superscript = None
-                r.text = "; ".join(parts)
-                changed += 1
-        # Optional: catch bracketed numbers that were not superscripted
-        # Example: "... text [1]" (baseline). Do a safe whole-paragraph replace.
-        if "[" in p.text and "]" in p.text:
-            orig = p.text
-            def repl(m):
-                n = int(m.group(1))
+                nums = expand_nums(r.text)
+                if nums:
+                    pieces = []
+                    for n in nums:
+                        txt = refmap.get(n)
+                        pieces.append(render(n, txt if txt else f"[{n}]", style).lstrip())
+                    r.font.superscript = None
+                    r.text = "; ".join(pieces)
+                    changed += 1
+        # baseline bracket or paren numbers like [1], (1-3)
+        orig = p.text
+        def repl(m):
+            nums = expand_nums(m.group(1))
+            pieces = []
+            for n in nums:
                 txt = refmap.get(n)
-                return render_inline(n, txt, style) if txt else m.group(0)
-            new_text = re.sub(r"\[(\d+)\]", repl, p.text)
-            if new_text != orig:
-                # WARNING: setting p.text flattens runs; ok for reference-bearing lines
-                p.text = new_text
-                changed += 1
+                pieces.append(render(n, txt if txt else f"[{n}]", style))
+            return "; ".join(pieces)
+        new = re.sub(r"[\[\(]\s*([0-9,\-\–—\s]+)\s*[\]\)]", repl, p.text)
+        if new != orig:
+            p.text = new
+            changed += 1
     return changed
 
-def delete_notes_block(paragraphs, start, end):
-    # python-docx can't delete paragraphs directly; use element removal
-    for i in range(start-1, end):  # also remove the "Notes" heading above it
-        if 0 <= i < len(paragraphs):
-            p = paragraphs[i]
-            p._element.getparent().remove(p._element)
+def delete_block(paragraphs, start, end):
+    # remove from bottom to top to keep indices valid
+    for idx in range(end-1, start-1, -1):
+        p = paragraphs[idx]
+        p._element.getparent().remove(p._element)
 
-# -------- main --------
+# ---- main ----
 if uploaded:
     doc = Document(uploaded)
-    paragraphs = list(all_paragraphs(doc))
-    blocks = build_all_blocks(paragraphs)
+    paragraphs = list(para_iter(doc))
 
-    if not blocks:
-        st.error("No 'Notes' section found. Ensure each chapter ends with a 'Notes' heading.")
+    # find ALL notes blocks first
+    note_heads = [i for i,p in enumerate(paragraphs) if is_notes_heading(p)]
+    if not note_heads:
+        st.error("No Notes/References sections found.")
         st.stop()
 
-    total_changes = 0
-    for (body_start, body_end, notes_start, notes_end, refmap) in blocks:
-        total_changes += replace_superscripts_in_range(
-            paragraphs, body_start, body_end, refmap, fmt
-        )
-        if delete_notes and refmap:
-            delete_notes_block(paragraphs, notes_start, notes_end)
+    # Build segments: body before first Notes, then Notes, etc.
+    blocks = []
+    prev_end = 0
+    for i in note_heads:
+        notes_start = i + 1
+        notes_end = next_block_end(paragraphs, notes_start)
+        refmap = parse_notes(paragraphs, notes_start, notes_end)
+        blocks.append((prev_end, i, notes_start, notes_end, refmap))
+        prev_end = notes_end
+
+    total = 0
+    for (body_start, head_i, notes_start, notes_end, refmap) in blocks:
+        total += replace_in_body(paragraphs, body_start, head_i, refmap, fmt)
+
+    if delete_notes:
+        # delete after replacements; recalc paragraph list each deletion batch
+        for (body_start, head_i, notes_start, notes_end, _) in reversed(blocks):
+            paragraphs = list(para_iter(doc))
+            # find the current indices again by matching text pointers (fallback by proximity)
+            # simplest robust: delete a span around notes_start..notes_end using previous texts
+            delete_block(paragraphs, head_i, notes_end)
 
     bio = BytesIO()
-    doc.save(bio)
-    bio.seek(0)
-    st.success(f"Inlined {total_changes} citation spot(s).")
+    doc.save(bio); bio.seek(0)
+    st.success(f"Inlined {total} citation spot(s) across the whole document.")
     st.download_button(
         "Download DOCX",
         data=bio.getvalue(),
-        file_name="inlined_references.docx",
+        file_name="book_inlined_references.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
