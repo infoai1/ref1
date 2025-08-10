@@ -279,4 +279,18 @@ else:
     
     **🚀 Auto Process Mode:**
     - Automatically detects largest font size as chapter headers
-    - Processes the entire document in
+    - Processes the entire document in one go
+    - Best for quick processing
+    
+    **📋 Step by Step Mode:**
+    - Manual control over each step
+    - Choose specific font sizes and chapters
+    - Best for precise control
+    
+    ### ✨ Features:
+    - ✅ Complete font detection (styles + runs + XML)
+    - ✅ Interactive chapter selection
+    - ✅ Multiple citation formats
+    - ✅ Original formatting preservation
+    - ✅ Chapter-wise processing for accuracy
+    """)
