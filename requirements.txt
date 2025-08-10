@@ -2,3 +2,4 @@ streamlit
 pypandoc
 Document
 python-docx
+pathlib
