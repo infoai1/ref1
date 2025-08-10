@@ -3,11 +3,6 @@ from docx import Document
 from docx.oxml.ns import qn
 from collections import Counter, defaultdict
 
-st.set_page_config(page_title="Step 1: Font Size Analysis", page_icon="🔍")
-st.title("🔍 Step 1: Document Font Size Analysis")
-
-uploaded = st.file_uploader("Upload your DOCX file", type=["docx"])
-
 def detect_all_font_sizes(doc):
     """Detect all font sizes in the document"""
     font_sizes = Counter()
@@ -75,46 +70,52 @@ def detect_all_font_sizes(doc):
     
     return font_sizes, font_examples
 
-if uploaded:
-    doc = Document(uploaded)
+# Only run UI code if this file is run directly
+if __name__ == "__main__":
+    st.set_page_config(page_title="Step 1: Font Size Analysis", page_icon="🔍")
+    st.title("🔍 Step 1: Document Font Size Analysis")
     
-    st.subheader("📊 Analyzing Font Sizes...")
-    font_sizes, font_examples = detect_all_font_sizes(doc)
+    uploaded = st.file_uploader("Upload your DOCX file", type=["docx"])
     
-    if font_sizes:
-        st.success(f"Found {len(font_sizes)} different font sizes!")
+    if uploaded:
+        doc = Document(uploaded)
         
-        # Display results
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Total Paragraphs", len(doc.paragraphs))
-        with col2:
-            st.metric("Font Sizes Found", len(font_sizes))
+        st.subheader("📊 Analyzing Font Sizes...")
+        font_sizes, font_examples = detect_all_font_sizes(doc)
         
-        # Chart
-        st.subheader("📈 Font Size Distribution")
-        chart_data = dict(font_sizes.most_common())
-        st.bar_chart(chart_data)
-        
-        # Examples
-        st.subheader("📝 Font Size Examples")
-        for font_size, count in sorted(font_sizes.items(), reverse=True):
-            with st.expander(f"Font Size {font_size}pt ({count} occurrences)"):
-                examples = font_examples[font_size]
-                for ex in examples:
-                    st.write(f"• **Para {ex['para_index']}**: {ex['text']}")
-        
-        # Save results for next step
-        st.session_state['font_analysis'] = {
-            'font_sizes': dict(font_sizes),
-            'font_examples': dict(font_examples),
-            'doc_path': uploaded.name
-        }
-        
-        st.success("✅ Analysis complete! Proceed to Step 2.")
-        st.info("Run: `streamlit run step2_font_selection.py`")
+        if font_sizes:
+            st.success(f"Found {len(font_sizes)} different font sizes!")
+            
+            # Display results
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Paragraphs", len(doc.paragraphs))
+            with col2:
+                st.metric("Font Sizes Found", len(font_sizes))
+            
+            # Chart
+            st.subheader("📈 Font Size Distribution")
+            chart_data = dict(font_sizes.most_common())
+            st.bar_chart(chart_data)
+            
+            # Examples
+            st.subheader("📝 Font Size Examples")
+            for font_size, count in sorted(font_sizes.items(), reverse=True):
+                with st.expander(f"Font Size {font_size}pt ({count} occurrences)"):
+                    examples = font_examples[font_size]
+                    for ex in examples:
+                        st.write(f"• **Para {ex['para_index']}**: {ex['text']}")
+            
+            # Save results for next step
+            st.session_state['font_analysis'] = {
+                'font_sizes': dict(font_sizes),
+                'font_examples': dict(font_examples),
+                'doc_path': uploaded.name
+            }
+            
+            st.success("✅ Analysis complete! Proceed to Step 2.")
+            st.info("Run: `streamlit run step2_font_selection.py`")
+        else:
+            st.error("No font sizes detected!")
     else:
-        st.error("No font sizes detected!")
-else:
-    st.info("📤 Upload a DOCX file to analyze font sizes")
-
+        st.info("📤 Upload a DOCX file to analyze font sizes")
