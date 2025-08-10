@@ -1,108 +1,219 @@
 import re
-import os
-import zipfile
 from io import BytesIO
-from pathlib import Path
 import streamlit as st
 from docx import Document
 from docx.shared import Pt
+from collections import Counter, defaultdict
 
-st.set_page_config(page_title="DOCX: Chapter-wise Citation Processor", page_icon="📚")
-st.title("Chapter-wise DOCX Citation Processor")
+st.set_page_config(page_title="DOCX: Smart Chapter Detector & Citation Processor", page_icon="📚")
+st.title("Smart Chapter Detection & Citation Processing")
 
 st.markdown("""
 ### Workflow:
-1. **Split**: Divide DOCX into chapters (based on font size 26)
-2. **Process**: Handle citations in each chapter individually  
-3. **Rejoin**: Combine all processed chapters back into one document
+1. **Analyze**: Examine entire document structure
+2. **Detect**: Find chapter boundaries using multiple criteria  
+3. **Split**: Divide into logical chapters
+4. **Process**: Handle citations in each chapter
+5. **Rejoin**: Combine processed chapters
 """)
 
-fmt = st.selectbox("Inline format", ["— 1. Reference text", "[1. Reference text]", "(Reference text)"], index=0)
-delete_notes = st.checkbox("Delete Notes/References sections after inlining", value=False)
-also_replace_parentheses = st.checkbox("Also convert (n)/(1–3). Risky near years; keep OFF.", value=False)
 uploaded = st.file_uploader("Upload the full book .docx", type=["docx"])
 
-# Configuration
-CHAPTER_FONT_SIZE = 26  # Font size that indicates chapter headers
-HEADING_RE = re.compile(r"^\s*(notes?|references?|endnotes?|sources?|bibliography|citations?)\s*:?\s*$", re.I)
-
-def get_font_size(run):
-    """Get font size of a run in points"""
-    if run.font.size:
-        return run.font.size.pt
-    return None
-
-def is_chapter_header(paragraph):
-    """Check if paragraph is a chapter header (font size 26)"""
-    for run in paragraph.runs:
-        if get_font_size(run) == CHAPTER_FONT_SIZE:
-            return True
-    return False
-
-def find_chapter_boundaries(doc):
-    """Find all chapter boundaries in the document"""
-    chapters = []
-    current_chapter_start = 0
+def analyze_document_structure(doc):
+    """Comprehensive analysis of document structure"""
+    analysis = {
+        'total_paragraphs': len(doc.paragraphs),
+        'font_sizes': Counter(),
+        'styles': Counter(),
+        'potential_headers': [],
+        'page_breaks': [],
+        'heading_patterns': [],
+        'empty_paragraphs': 0
+    }
     
-    for i, paragraph in enumerate(doc.paragraphs):
-        if is_chapter_header(paragraph):
-            # If we're not at the beginning, save the previous chapter
-            if i > 0:
-                chapters.append((current_chapter_start, i - 1, get_chapter_title(doc.paragraphs, current_chapter_start, i - 1)))
-            current_chapter_start = i
-    
-    # Add the last chapter
-    if current_chapter_start < len(doc.paragraphs):
-        chapters.append((current_chapter_start, len(doc.paragraphs) - 1, get_chapter_title(doc.paragraphs, current_chapter_start, len(doc.paragraphs) - 1)))
-    
-    return chapters
-
-def get_chapter_title(paragraphs, start, end):
-    """Extract chapter title from the first few paragraphs"""
-    for i in range(start, min(start + 3, end + 1)):
-        if i < len(paragraphs):
-            text = paragraphs[i].text.strip()
-            if text and len(text) < 100:  # Reasonable title length
-                # Clean up the title for filename
-                clean_title = re.sub(r'[^\w\s-]', '', text)
-                clean_title = re.sub(r'\s+', '_', clean_title)
-                return clean_title[:50]  # Limit length
-    return f"Chapter_{start}"
-
-def create_chapter_document(original_doc, start_para, end_para):
-    """Create a new document with paragraphs from start_para to end_para"""
-    new_doc = Document()
-    
-    # Copy paragraphs
-    for i in range(start_para, end_para + 1):
-        if i < len(original_doc.paragraphs):
-            old_para = original_doc.paragraphs[i]
-            new_para = new_doc.add_paragraph()
+    for i, para in enumerate(doc.paragraphs):
+        text = para.text.strip()
+        
+        # Count empty paragraphs
+        if not text:
+            analysis['empty_paragraphs'] += 1
+            continue
             
-            # Copy paragraph style
-            new_para.style = old_para.style
+        # Analyze styles
+        style_name = getattr(para.style, 'name', 'Normal')
+        analysis['styles'][style_name] += 1
+        
+        # Analyze font sizes
+        font_sizes_in_para = []
+        for run in para.runs:
+            if run.font.size:
+                size_pt = run.font.size.pt
+                font_sizes_in_para.append(size_pt)
+                analysis['font_sizes'][size_pt] += 1
+        
+        # Look for potential headers
+        if font_sizes_in_para:
+            max_font = max(font_sizes_in_para)
+            avg_font = sum(font_sizes_in_para) / len(font_sizes_in_para)
             
-            # Copy runs with formatting
-            for run in old_para.runs:
-                new_run = new_para.add_run(run.text)
-                new_run.font.name = run.font.name
-                new_run.font.size = run.font.size
-                new_run.font.bold = run.font.bold
-                new_run.font.italic = run.font.italic
-                new_run.font.underline = run.font.underline
-                if hasattr(run.font, 'superscript'):
-                    new_run.font.superscript = run.font.superscript
+            # Potential header criteria
+            is_potential_header = (
+                max_font > 14 or  # Large font
+                style_name.lower().startswith('heading') or  # Heading style
+                (len(text) < 100 and max_font >= 12) or  # Short text with decent font
+                re.match(r'^(chapter|part|section)\s+\d+', text, re.I) or  # Chapter/Part pattern
+                re.match(r'^\d+[\.\)]\s+[A-Z]', text) or  # Numbered sections
+                (text.isupper() and len(text.split()) <= 10)  # All caps short text
+            )
+            
+            if is_potential_header:
+                analysis['potential_headers'].append({
+                    'index': i,
+                    'text': text[:100],
+                    'font_size': max_font,
+                    'style': style_name,
+                    'criteria': []
+                })
+        
+        # Look for common heading patterns
+        patterns = [
+            r'^(chapter|ch\.?)\s+\d+',
+            r'^(part|section)\s+\d+',
+            r'^\d+[\.\)]\s+[A-Z][A-Z\s]+$',
+            r'^[A-Z][A-Z\s]{5,50}$',
+            r'^(introduction|conclusion|foreword|preface|epilogue)$'
+        ]
+        
+        for pattern in patterns:
+            if re.match(pattern, text, re.I):
+                analysis['heading_patterns'].append({
+                    'index': i,
+                    'text': text,
+                    'pattern': pattern
+                })
     
-    # Copy tables that fall within the range
-    for table in original_doc.tables:
-        # This is a simplified approach - in practice, you'd need to check
-        # if the table falls within the paragraph range
-        pass
+    return analysis
+
+def smart_chapter_detection(doc, analysis):
+    """Smart chapter detection using multiple criteria"""
+    potential_chapters = []
     
-    return new_doc
+    # Strategy 1: Use heading styles
+    for i, para in enumerate(doc.paragraphs):
+        style_name = getattr(para.style, 'name', 'Normal')
+        if style_name.lower().startswith('heading 1'):
+            potential_chapters.append({
+                'index': i,
+                'text': para.text.strip(),
+                'method': 'heading_style',
+                'confidence': 0.9
+            })
+    
+    # Strategy 2: Use font size analysis
+    if analysis['font_sizes']:
+        # Find the largest font sizes
+        sorted_fonts = sorted(analysis['font_sizes'].items(), key=lambda x: x[1], reverse=True)
+        large_fonts = [size for size, count in sorted_fonts[:3] if size > 14]
+        
+        for i, para in enumerate(doc.paragraphs):
+            text = para.text.strip()
+            if not text or len(text) > 200:  # Skip empty or very long paragraphs
+                continue
+                
+            max_font_in_para = 0
+            for run in para.runs:
+                if run.font.size:
+                    max_font_in_para = max(max_font_in_para, run.font.size.pt)
+            
+            if max_font_in_para in large_fonts:
+                potential_chapters.append({
+                    'index': i,
+                    'text': text,
+                    'method': 'large_font',
+                    'confidence': 0.7,
+                    'font_size': max_font_in_para
+                })
+    
+    # Strategy 3: Pattern-based detection
+    patterns = [
+        (r'^(chapter|ch\.?)\s+\d+', 0.95),
+        (r'^(part|section)\s+\d+', 0.8),
+        (r'^\d+[\.\)]\s+[A-Z][A-Z\s]+$', 0.7),
+        (r'^[A-Z][A-Z\s]{10,50}$', 0.6),
+        (r'^(introduction|conclusion|foreword|preface|epilogue|bibliography|references|notes)$', 0.8)
+    ]
+    
+    for i, para in enumerate(doc.paragraphs):
+        text = para.text.strip()
+        if not text:
+            continue
+            
+        for pattern, confidence in patterns:
+            if re.match(pattern, text, re.I):
+                potential_chapters.append({
+                    'index': i,
+                    'text': text,
+                    'method': 'pattern',
+                    'confidence': confidence,
+                    'pattern': pattern
+                })
+    
+    # Strategy 4: All caps detection
+    for i, para in enumerate(doc.paragraphs):
+        text = para.text.strip()
+        if (text and text.isupper() and 5 <= len(text.split()) <= 15 
+            and not any(char.isdigit() for char in text)):
+            potential_chapters.append({
+                'index': i,
+                'text': text,
+                'method': 'all_caps',
+                'confidence': 0.6
+            })
+    
+    # Remove duplicates and sort by index
+    seen_indices = set()
+    unique_chapters = []
+    for chapter in potential_chapters:
+        if chapter['index'] not in seen_indices:
+            seen_indices.add(chapter['index'])
+            unique_chapters.append(chapter)
+    
+    unique_chapters.sort(key=lambda x: x['index'])
+    
+    # Merge nearby detections (within 3 paragraphs)
+    merged_chapters = []
+    for chapter in unique_chapters:
+        if not merged_chapters or chapter['index'] - merged_chapters[-1]['index'] > 3:
+            merged_chapters.append(chapter)
+        else:
+            # Merge with previous if higher confidence
+            if chapter['confidence'] > merged_chapters[-1]['confidence']:
+                merged_chapters[-1] = chapter
+    
+    return merged_chapters
+
+def create_chapter_boundaries(chapters, total_paragraphs):
+    """Create chapter boundaries for splitting"""
+    if not chapters:
+        return [(0, total_paragraphs - 1, "Full_Document")]
+    
+    boundaries = []
+    for i, chapter in enumerate(chapters):
+        start = chapter['index']
+        end = chapters[i + 1]['index'] - 1 if i + 1 < len(chapters) else total_paragraphs - 1
+        
+        # Clean title for filename
+        title = re.sub(r'[^\w\s-]', '', chapter['text'])
+        title = re.sub(r'\s+', '_', title)[:50]
+        if not title:
+            title = f"Chapter_{i+1}"
+        
+        boundaries.append((start, end, title, chapter))
+    
+    return boundaries
 
 def para_iter(doc):
-    """Iterate through all paragraphs in document including those in tables"""
+    """Iterate through all paragraphs including tables"""
     for p in doc.paragraphs:
         yield p
     for t in doc.tables:
@@ -111,13 +222,51 @@ def para_iter(doc):
                 for p in c.paragraphs:
                     yield p
 
+def create_chapter_document(original_doc, start_para, end_para):
+    """Create a new document with specified paragraph range"""
+    new_doc = Document()
+    
+    # Copy core document properties
+    new_doc.core_properties.title = f"Chapter {start_para}-{end_para}"
+    
+    # Copy paragraphs
+    for i in range(start_para, min(end_para + 1, len(original_doc.paragraphs))):
+        old_para = original_doc.paragraphs[i]
+        new_para = new_doc.add_paragraph()
+        
+        # Copy paragraph style
+        try:
+            new_para.style = old_para.style
+        except:
+            pass
+        
+        # Copy runs with formatting
+        for run in old_para.runs:
+            new_run = new_para.add_run(run.text)
+            # Copy font properties
+            try:
+                new_run.font.name = run.font.name
+                new_run.font.size = run.font.size
+                new_run.font.bold = run.font.bold
+                new_run.font.italic = run.font.italic
+                new_run.font.underline = run.font.underline
+                if hasattr(run.font, 'superscript'):
+                    new_run.font.superscript = run.font.superscript
+                if hasattr(run.font, 'subscript'):
+                    new_run.font.subscript = run.font.subscript
+            except:
+                pass
+    
+    return new_doc
+
+# Citation processing functions (same as before)
+HEADING_RE = re.compile(r"^\s*(notes?|references?|endnotes?|sources?|bibliography|citations?)\s*:?\s*$", re.I)
+
 def is_notes_heading(p):
-    """Check if paragraph is a Notes/References heading"""
     text = (p.text or "").strip()
     return bool(HEADING_RE.match(text)) if text else False
 
 def find_notes_sections(paragraphs):
-    """Find all notes sections in the document"""
     sections = []
     for i, p in enumerate(paragraphs):
         if is_notes_heading(p):
@@ -127,14 +276,12 @@ def find_notes_sections(paragraphs):
     return sections
 
 def find_section_end(paragraphs, start):
-    """Find the end of a section"""
     consecutive_blanks = 0
     for i in range(start, len(paragraphs)):
         p = paragraphs[i]
         text = (p.text or "").strip()
         
-        if is_notes_heading(p) or (hasattr(p, 'style') and 
-                                  getattr(p.style, 'name', '').lower().startswith('heading')):
+        if is_notes_heading(p):
             return i
         
         if not text:
@@ -146,7 +293,6 @@ def find_section_end(paragraphs, start):
     return len(paragraphs)
 
 def parse_references_advanced(paragraphs, start, end):
-    """Advanced reference parsing"""
     refs = {}
     current_num = None
     current_text = ""
@@ -187,92 +333,15 @@ def parse_references_advanced(paragraphs, start, end):
     
     return refs
 
-def expand_number_range(num_str):
-    """Expand number ranges and lists"""
-    nums = []
-    parts = re.split(r'[,\s]+', num_str.replace('–', '-').replace('—', '-'))
-    
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-        if '-' in part:
-            try:
-                start, end = part.split('-', 1)
-                start, end = int(start), int(end)
-                if 1 <= start <= end <= 999 and (end - start) < 50:
-                    nums.extend(range(start, end + 1))
-            except:
-                pass
-        elif part.isdigit():
-            nums.append(int(part))
-    return sorted(set(nums))
-
-def format_reference(num, text, style):
-    """Format reference according to selected style"""
-    if style.startswith("—"):
-        return f" — {num}. {text}"
-    elif style.startswith("["):
-        return f" [{num}. {text}]"
-    else:
-        return f" ({text})"
-
-def replace_citations_in_paragraph(paragraph, all_refs, style, allow_paren=False):
-    """Replace citations in a single paragraph"""
-    if not all_refs:
-        return 0
-    
-    changes = 0
-    max_ref_num = max(all_refs.keys())
-    
-    # Handle superscript runs
-    for run in paragraph.runs:
-        if getattr(run.font, 'superscript', None):
-            nums = [int(x) for x in re.findall(r'\d+', run.text)]
-            if (nums and all(1 <= n <= max_ref_num and n in all_refs for n in nums) 
-                and not any(n >= 1000 for n in nums)):
-                replacements = [format_reference(n, all_refs[n], style).strip() for n in nums]
-                run.font.superscript = None
-                run.text = "; ".join(replacements)
-                changes += 1
-    
-    # Handle text-based citations
-    original_text = paragraph.text
-    modified_text = original_text
-    
-    def replace_square(match):
-        nums = expand_number_range(match.group(1))
-        if (nums and all(1 <= n <= max_ref_num and n in all_refs for n in nums) 
-            and not any(n >= 1000 for n in nums)):
-            replacements = [format_reference(n, all_refs[n], style) for n in nums]
-            return "; ".join(replacements)
-        return match.group(0)
-    
-    modified_text = re.sub(r'\[([0-9,\-–—\s]+)\]', replace_square, modified_text)
-    
-    if allow_paren:
-        modified_text = re.sub(r'\(([0-9,\-–—\s]+)\)', replace_square, modified_text)
-    
-    if modified_text != original_text:
-        for run in paragraph.runs:
-            run.text = ""
-        if paragraph.runs:
-            paragraph.runs[0].text = modified_text
-        else:
-            paragraph.add_run(modified_text)
-        changes += 1
-    
-    return changes
-
-def process_single_chapter(doc, style, allow_paren=False, delete_notes_sections=False):
-    """Process a single chapter document"""
+def process_single_chapter(doc, fmt="[1. Reference text]", allow_paren=False, delete_notes_sections=False):
+    """Process citations in a single chapter"""
     paragraphs = list(para_iter(doc))
     notes_sections = find_notes_sections(paragraphs)
     
     if not notes_sections:
         return 0, 0
     
-    # Parse all references
+    # Parse references
     all_refs = {}
     for section_head, section_start, section_end in notes_sections:
         refs = parse_references_advanced(paragraphs, section_start, section_end)
@@ -281,78 +350,124 @@ def process_single_chapter(doc, style, allow_paren=False, delete_notes_sections=
     if not all_refs:
         return 0, 0
     
-    # Replace citations
+    # Replace citations (simplified version)
     total_replacements = 0
     notes_ranges = set()
     for section_head, section_start, section_end in notes_sections:
         for i in range(section_head, section_end):
             notes_ranges.add(i)
     
+    # Simple citation replacement
     for i, paragraph in enumerate(paragraphs):
-        if i not in notes_ranges and paragraph.text and paragraph.text.strip():
-            replacements = replace_citations_in_paragraph(paragraph, all_refs, style, allow_paren)
-            total_replacements += replacements
-    
-    # Delete notes sections if requested
-    if delete_notes_sections:
-        for section_head, section_start, section_end in reversed(notes_sections):
-            for idx in range(section_end - 1, section_head - 1, -1):
-                if idx < len(paragraphs):
-                    p = paragraphs[idx]
-                    if p._element.getparent() is not None:
-                        p._element.getparent().remove(p._element)
+        if i not in notes_ranges and paragraph.text:
+            original_text = paragraph.text
+            modified_text = original_text
+            
+            # Replace [1], [1], etc.
+            def replace_citation(match):
+                try:
+                    num = int(match.group(1))
+                    if num in all_refs:
+                        if fmt.startswith("—"):
+                            return f" — {num}. {all_refs[num]}"
+                        elif fmt.startswith("["):
+                            return f" [{num}. {all_refs[num]}]"
+                        else:
+                            return f" ({all_refs[num]})"
+                except:
+                    pass
+                return match.group(0)
+            
+            modified_text = re.sub(r'\[(\d+)\]', replace_citation, modified_text)
+            
+            if modified_text != original_text:
+                # Update paragraph text
+                for run in paragraph.runs:
+                    run.text = ""
+                if paragraph.runs:
+                    paragraph.runs[0].text = modified_text
+                else:
+                    paragraph.add_run(modified_text)
+                total_replacements += 1
     
     return len(all_refs), total_replacements
 
 def rejoin_chapters(chapter_docs):
-    """Rejoin all processed chapters into one document"""
+    """Rejoin processed chapters"""
     final_doc = Document()
     
     for i, chapter_doc in enumerate(chapter_docs):
         if i > 0:
-            # Add a page break between chapters
             final_doc.add_page_break()
         
-        # Copy all paragraphs from chapter
         for para in chapter_doc.paragraphs:
             new_para = final_doc.add_paragraph()
-            new_para.style = para.style
+            try:
+                new_para.style = para.style
+            except:
+                pass
             
             for run in para.runs:
                 new_run = new_para.add_run(run.text)
-                new_run.font.name = run.font.name
-                new_run.font.size = run.font.size
-                new_run.font.bold = run.font.bold
-                new_run.font.italic = run.font.italic
-                new_run.font.underline = run.font.underline
-                if hasattr(run.font, 'superscript'):
-                    new_run.font.superscript = run.font.superscript
-        
-        # Copy tables
-        for table in chapter_doc.tables:
-            new_table = final_doc.add_table(rows=len(table.rows), cols=len(table.columns))
-            for i, row in enumerate(table.rows):
-                for j, cell in enumerate(row.cells):
-                    new_table.cell(i, j).text = cell.text
+                try:
+                    new_run.font.name = run.font.name
+                    new_run.font.size = run.font.size
+                    new_run.font.bold = run.font.bold
+                    new_run.font.italic = run.font.italic
+                except:
+                    pass
     
     return final_doc
 
-# Main Streamlit app
+# Main app
 if uploaded:
     try:
         doc = Document(uploaded)
         
-        # Step 1: Analyze and split into chapters
-        st.subheader("📖 Step 1: Chapter Analysis")
-        chapters = find_chapter_boundaries(doc)
+        # Step 1: Analyze document structure
+        st.subheader("📊 Step 1: Document Analysis")
+        with st.spinner("Analyzing document structure..."):
+            analysis = analyze_document_structure(doc)
         
-        if not chapters:
-            st.warning("No chapters found (no font size 26 text detected). Processing as single document...")
-            chapters = [(0, len(doc.paragraphs) - 1, "Full_Document")]
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Paragraphs", analysis['total_paragraphs'])
+            st.metric("Empty Paragraphs", analysis['empty_paragraphs'])
+        with col2:
+            st.metric("Unique Font Sizes", len(analysis['font_sizes']))
+            st.metric("Unique Styles", len(analysis['styles']))
         
-        st.write(f"Found **{len(chapters)}** chapters:")
-        for i, (start, end, title) in enumerate(chapters):
-            st.write(f"- Chapter {i+1:02d}: {title} (paragraphs {start}-{end})")
+        # Show font size distribution
+        st.write("**Font Size Distribution:**")
+        font_data = dict(analysis['font_sizes'].most_common(10))
+        st.bar_chart(font_data)
+        
+        # Show style distribution  
+        st.write("**Style Distribution:**")
+        style_data = dict(analysis['styles'].most_common(10))
+        st.bar_chart(style_data)
+        
+        # Step 2: Smart chapter detection
+        st.subheader("🔍 Step 2: Smart Chapter Detection")
+        chapters = smart_chapter_detection(doc, analysis)
+        
+        st.write(f"**Detected {len(chapters)} potential chapters:**")
+        for i, chapter in enumerate(chapters):
+            confidence_color = "🟢" if chapter['confidence'] > 0.8 else "🟡" if chapter['confidence'] > 0.6 else "🔴"
+            st.write(f"{confidence_color} **Chapter {i+1}** (Para {chapter['index']}): {chapter['text'][:80]}...")
+            st.caption(f"Method: {chapter['method']}, Confidence: {chapter['confidence']:.1%}")
+        
+        # Step 3: Chapter boundaries
+        boundaries = create_chapter_boundaries(chapters, len(doc.paragraphs))
+        
+        st.write(f"**Chapter Boundaries:**")
+        for i, (start, end, title, chapter_info) in enumerate(boundaries):
+            st.write(f"📖 **{i+1:02d}. {title}** - Paragraphs {start} to {end} ({end-start+1} paragraphs)")
+        
+        # Processing options
+        st.subheader("⚙️ Step 3: Processing Options")
+        fmt = st.selectbox("Citation format", ["[1. Reference text]", "— 1. Reference text", "(Reference text)"])
+        delete_notes = st.checkbox("Delete Notes sections after processing")
         
         if st.button("🚀 Process All Chapters"):
             chapter_docs = []
@@ -360,81 +475,42 @@ if uploaded:
             total_replacements = 0
             
             progress_bar = st.progress(0)
-            status_text = st.empty()
+            status = st.empty()
             
-            # Step 2: Process each chapter
-            st.subheader("⚙️ Step 2: Processing Chapters")
-            
-            for i, (start, end, title) in enumerate(chapters):
-                status_text.text(f"Processing Chapter {i+1}/{len(chapters)}: {title}")
+            for i, (start, end, title, chapter_info) in enumerate(boundaries):
+                status.text(f"Processing chapter {i+1}/{len(boundaries)}: {title}")
                 
-                # Create chapter document
+                # Create and process chapter
                 chapter_doc = create_chapter_document(doc, start, end)
-                
-                # Process chapter
-                refs_found, citations_replaced = process_single_chapter(
-                    chapter_doc, fmt, also_replace_parentheses, delete_notes
-                )
+                refs_found, citations_replaced = process_single_chapter(chapter_doc, fmt, False, delete_notes)
                 
                 chapter_docs.append(chapter_doc)
                 total_refs += refs_found
                 total_replacements += citations_replaced
                 
-                st.write(f"✅ Chapter {i+1:02d} - {title}: {refs_found} refs, {citations_replaced} replacements")
-                progress_bar.progress((i + 1) / len(chapters))
+                st.write(f"✅ **{i+1:02d}. {title}**: {refs_found} refs, {citations_replaced} citations replaced")
+                progress_bar.progress((i + 1) / len(boundaries))
             
-            # Step 3: Rejoin all chapters
-            st.subheader("🔗 Step 3: Rejoining Chapters")
-            status_text.text("Rejoining all processed chapters...")
-            
+            # Rejoin chapters
+            status.text("Rejoining processed chapters...")
             final_doc = rejoin_chapters(chapter_docs)
             
-            # Save final document
+            # Save result
             bio = BytesIO()
             final_doc.save(bio)
             bio.seek(0)
             
-            status_text.text("✅ Processing complete!")
-            st.success(f"**Final Results**: {total_refs} total references found, {total_replacements} total citations replaced across {len(chapters)} chapters!")
+            st.success(f"🎉 **Processing Complete!** {total_refs} references found, {total_replacements} citations replaced across {len(boundaries)} chapters!")
             
             st.download_button(
                 "📥 Download Processed Document",
                 data=bio.getvalue(),
-                file_name="book_processed_citations.docx",
+                file_name="book_processed_complete.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
-            
-            # Optional: Download individual chapters
-            with st.expander("📁 Download Individual Chapters"):
-                for i, (chapter_doc, (start, end, title)) in enumerate(zip(chapter_docs, chapters)):
-                    chapter_bio = BytesIO()
-                    chapter_doc.save(chapter_bio)
-                    chapter_bio.seek(0)
-                    
-                    st.download_button(
-                        f"Chapter {i+1:02d}: {title}",
-                        data=chapter_bio.getvalue(),
-                        file_name=f"chapter_{i+1:02d}_{title}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key=f"chapter_{i}"
-                    )
-    
-    except Exception as e:
-        st.error(f"Error processing document: {str(e)}")
-        st.exception(e)
 
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
+        st.exception(e)
 else:
-    st.info("📤 Please upload a DOCX file to begin processing.")
-    st.markdown("""
-    ### How it works:
-    1. **Chapter Detection**: Automatically detects chapters based on font size 26
-    2. **Individual Processing**: Each chapter is processed separately for better accuracy
-    3. **Citation Replacement**: Converts numbered citations to full inline references
-    4. **Rejoining**: Combines all processed chapters back into one document
-    
-    ### Benefits:
-    - ✅ Better accuracy per chapter
-    - ✅ Easier debugging and troubleshooting  
-    - ✅ Memory efficient for large documents
-    - ✅ Serial numbering for organization
-    """)
+    st.info("📤 Upload a DOCX file to begin comprehensive analysis and processing")
