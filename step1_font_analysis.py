@@ -4,41 +4,26 @@ from docx.oxml.ns import qn
 from collections import Counter, defaultdict
 
 def detect_all_font_sizes(doc):
-    """Enhanced font size detection - finds ALL font sizes including hidden ones like 26pt"""
+    """Detect all font sizes in the document"""
     font_sizes = Counter()
     font_examples = defaultdict(list)
     
-    # Method 1: Check document styles (where 26pt often hides)
+    # Check document styles
     style_fonts = {}
     for style in doc.styles:
         try:
             if hasattr(style, 'font') and style.font and style.font.size:
-                size_pt = style.font.size.pt
-                style_fonts[style.name] = size_pt
-                font_sizes[size_pt] += 1
+                style_fonts[style.name] = style.font.size.pt
         except:
             pass
     
-    # Method 2: Check document defaults and themes
-    try:
-        # Document defaults
-        doc_defaults = doc.element.xpath('//w:docDefaults')
-        for d in doc_defaults:
-            sz = d.xpath('.//w:sz')
-            if sz:
-                val = sz[0].get(qn('w:val'))
-                if val:
-                    font_sizes[float(val)/2] += 1
-    except:
-        pass
-    
-    # Method 3: Deep paragraph and run analysis
+    # Check each paragraph
     for i, para in enumerate(doc.paragraphs):
         text = para.text.strip()
         if not text:
             continue
         
-        # Get style font size for this paragraph
+        # Get style font size
         style_font_size = None
         try:
             style_name = para.style.name
@@ -46,37 +31,31 @@ def detect_all_font_sizes(doc):
         except:
             pass
         
-        # Check each run with multiple methods
+        # Check runs
         para_font_sizes = []
         for run in para.runs:
-            font_size = style_font_size  # Start with style font
+            font_size = style_font_size  # Default to style
             
-            # Direct font.size check
+            # Check run font size
             try:
                 if run.font.size:
                     font_size = run.font.size.pt
             except:
                 pass
             
-            # XML-level font size check
+            # Check XML
             try:
                 if run.element.rPr is not None:
-                    # Standard font size
                     sz = run.element.rPr.find(qn('w:sz'))
                     if sz is not None:
                         font_size = float(sz.get(qn('w:val'))) / 2
-                    
-                    # Complex script font size
-                    szCs = run.element.rPr.find(qn('w:szCs'))
-                    if szCs is not None:
-                        font_size = max(font_size or 0, float(szCs.get(qn('w:val'))) / 2)
             except:
                 pass
             
             if font_size:
                 para_font_sizes.append(font_size)
         
-        # Use the largest font size found
+        # Use largest font in paragraph
         if para_font_sizes:
             max_font = max(para_font_sizes)
             font_sizes[max_font] += 1
@@ -88,21 +67,6 @@ def detect_all_font_sizes(doc):
                     'text': text[:80] + ('...' if len(text) > 80 else ''),
                     'full_text': text
                 })
-    
-    # Method 4: Global XML search for font sizes (catches hidden 26pt)
-    try:
-        from lxml import etree
-        root = doc.element
-        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-        sz_elements = root.xpath('//w:sz', namespaces=ns)
-        for sz in sz_elements:
-            val = sz.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}val')
-            if val:
-                font_sizes[float(val)/2] += 1
-    except ImportError:
-        st.warning("lxml not installed, skipping global XML search")
-    except:
-        pass
     
     return font_sizes, font_examples
 
@@ -141,14 +105,29 @@ if __name__ == "__main__":
                     examples = font_examples[font_size]
                     for ex in examples:
                         st.write(f"• **Para {ex['para_index']}**: {ex['text']}")
-            
-            # Save results for next step
-            st.session_state['font_analysis'] = {
-                'font_sizes': dict(font_sizes),
-                'font_examples': dict(font_examples),
-                'doc_path': uploaded.name
-            }
-            
+        
+        # 🆕 MANUAL FONT SIZE ADDITION (NEW FEATURE)
+        st.subheader("➕ Add Missing Font Sizes")
+        st.info("If your chapter font size (like 26pt) wasn't detected above, add it manually:")
+        
+        manual_font = st.number_input("Enter font size (e.g., 26):", min_value=1.0, max_value=100.0, step=0.5, value=26.0)
+        
+        if st.button("Add This Font Size"):
+            if manual_font not in font_sizes:
+                font_sizes[manual_font] = 1
+                font_examples[manual_font] = [{'para_index': -1, 'text': f'Manually added {manual_font}pt', 'full_text': f'Manually added {manual_font}pt'}]
+                st.success(f"✅ Added {manual_font}pt to available font sizes!")
+            else:
+                st.info(f"Font size {manual_font}pt already exists!")
+        
+        # Save results for next step
+        st.session_state['font_analysis'] = {
+            'font_sizes': dict(font_sizes),
+            'font_examples': dict(font_examples),
+            'doc_path': uploaded.name
+        }
+        
+        if font_sizes:
             st.success("✅ Analysis complete! Proceed to Step 2.")
             st.info("Run: `streamlit run step2_font_selection.py`")
         else:
