@@ -2,17 +2,6 @@ import streamlit as st
 from docx import Document
 from docx.oxml.ns import qn
 
-st.set_page_config(page_title="Step 2: Choose Chapter Font", page_icon="🎯")
-st.title("🎯 Step 2: Choose Chapter Font Size")
-
-uploaded = st.file_uploader("Upload your DOCX file", type=["docx"])
-
-def get_font_analysis():
-    """Get font analysis from previous step"""
-    if 'font_analysis' in st.session_state:
-        return st.session_state['font_analysis']
-    return None
-
 def find_paragraphs_with_font(doc, target_font_size):
     """Find all paragraphs using the target font size"""
     candidates = []
@@ -72,50 +61,62 @@ def find_paragraphs_with_font(doc, target_font_size):
     
     return candidates
 
-if uploaded:
-    doc = Document(uploaded)
-    analysis = get_font_analysis()
-    
-    if analysis:
-        st.subheader("📊 Available Font Sizes")
-        font_sizes = analysis['font_sizes']
-        
-        # Show available font sizes
-        for size, count in sorted(font_sizes.items(), reverse=True):
-            st.write(f"**{size}pt** - {count} occurrences")
-        
-        # Let user choose
-        st.subheader("🎯 Select Chapter Header Font Size")
-        available_sizes = sorted(font_sizes.keys(), reverse=True)
-        selected_font = st.selectbox(
-            "Choose font size for chapter headers:",
-            available_sizes,
-            format_func=lambda x: f"{x}pt ({font_sizes[x]} occurrences)"
-        )
-        
-        if st.button("🔍 Find Chapters with This Font Size"):
-            chapters = find_paragraphs_with_font(doc, selected_font)
-            
-            if chapters:
-                st.success(f"Found {len(chapters)} potential chapter headers!")
-                
-                # Save for next step
-                st.session_state['chapter_candidates'] = {
-                    'font_size': selected_font,
-                    'chapters': chapters
-                }
-                
-                st.subheader("📋 Preview of Potential Chapters")
-                for i, chapter in enumerate(chapters):
-                    st.write(f"**{i+1:02d}.** Para {chapter['index']}: {chapter['preview']}")
-                
-                st.success("✅ Chapters found! Proceed to Step 3.")
-                st.info("Run: `streamlit run step3_chapter_selection.py`")
-            else:
-                st.warning(f"No paragraphs found with font size {selected_font}pt")
-    else:
-        st.warning("⚠️ Please complete Step 1 first (Font Analysis)")
-        st.info("Run: `streamlit run step1_font_analysis.py`")
-else:
-    st.info("📤 Upload the same DOCX file from Step 1")
+def get_font_analysis():
+    """Get font analysis from previous step"""
+    if 'font_analysis' in st.session_state:
+        return st.session_state['font_analysis']
+    return None
 
+# Only run UI code if this file is run directly
+if __name__ == "__main__":
+    st.set_page_config(page_title="Step 2: Choose Chapter Font", page_icon="🎯")
+    st.title("🎯 Step 2: Choose Chapter Font Size")
+    
+    uploaded = st.file_uploader("Upload your DOCX file", type=["docx"])
+    
+    if uploaded:
+        doc = Document(uploaded)
+        analysis = get_font_analysis()
+        
+        if analysis:
+            st.subheader("📊 Available Font Sizes")
+            font_sizes = analysis['font_sizes']
+            
+            # Show available font sizes
+            for size, count in sorted(font_sizes.items(), reverse=True):
+                st.write(f"**{size}pt** - {count} occurrences")
+            
+            # Let user choose
+            st.subheader("🎯 Select Chapter Header Font Size")
+            available_sizes = sorted(font_sizes.keys(), reverse=True)
+            selected_font = st.selectbox(
+                "Choose font size for chapter headers:",
+                available_sizes,
+                format_func=lambda x: f"{x}pt ({font_sizes[x]} occurrences)"
+            )
+            
+            if st.button("🔍 Find Chapters with This Font Size"):
+                chapters = find_paragraphs_with_font(doc, selected_font)
+                
+                if chapters:
+                    st.success(f"Found {len(chapters)} potential chapter headers!")
+                    
+                    # Save for next step
+                    st.session_state['chapter_candidates'] = {
+                        'font_size': selected_font,
+                        'chapters': chapters
+                    }
+                    
+                    st.subheader("📋 Preview of Potential Chapters")
+                    for i, chapter in enumerate(chapters):
+                        st.write(f"**{i+1:02d}.** Para {chapter['index']}: {chapter['preview']}")
+                    
+                    st.success("✅ Chapters found! Proceed to Step 3.")
+                    st.info("Run: `streamlit run step3_chapter_selection.py`")
+                else:
+                    st.warning(f"No paragraphs found with font size {selected_font}pt")
+        else:
+            st.warning("⚠️ Please complete Step 1 first (Font Analysis)")
+            st.info("Run: `streamlit run step1_font_analysis.py`")
+    else:
+        st.info("📤 Upload the same DOCX file from Step 1")
