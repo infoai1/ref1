@@ -3,11 +3,6 @@ from docx import Document
 from io import BytesIO
 import re
 
-st.set_page_config(page_title="Step 4: Process Citations", page_icon="⚙️")
-st.title("⚙️ Step 4: Process Citations")
-
-uploaded = st.file_uploader("Upload your DOCX file", type=["docx"])
-
 # Citation processing functions
 HEADING_RE = re.compile(r"^\s*(notes?|references?|endnotes?|sources?|bibliography|citations?)\s*:?\s*$", re.I)
 
@@ -181,58 +176,64 @@ def process_chapter_citations(doc, fmt="[1. Reference text]", delete_notes=False
     
     return len(all_refs), replacements
 
-if uploaded:
-    final_chapters = st.session_state.get('final_chapters')
+# Only run UI code if this file is run directly
+if __name__ == "__main__":
+    st.set_page_config(page_title="Step 4: Process Citations", page_icon="⚙️")
+    st.title("⚙️ Step 4: Process Citations")
     
-    if final_chapters:
-        doc = Document(uploaded)
-        boundaries = final_chapters['boundaries']
+    uploaded = st.file_uploader("Upload your DOCX file", type=["docx"])
+    
+    if uploaded:
+        final_chapters = st.session_state.get('final_chapters')
         
-        st.subheader("⚙️ Processing Options")
-        col1, col2 = st.columns(2)
-        with col1:
-            fmt = st.selectbox("Citation format:", ["[1. Reference text]", "— 1. Reference text", "(Reference text)"])
-        with col2:
-            delete_notes = st.checkbox("Delete Notes sections after processing")
-        
-        if st.button("🚀 Process All Chapters"):
-            chapter_docs = []
-            total_refs = 0
-            total_replacements = 0
+        if final_chapters:
+            doc = Document(uploaded)
+            boundaries = final_chapters['boundaries']
             
-            progress = st.progress(0)
-            status = st.empty()
+            st.subheader("⚙️ Processing Options")
+            col1, col2 = st.columns(2)
+            with col1:
+                fmt = st.selectbox("Citation format:", ["[1. Reference text]", "— 1. Reference text", "(Reference text)"])
+            with col2:
+                delete_notes = st.checkbox("Delete Notes sections after processing")
             
-            for i, (start, end, title) in enumerate(boundaries):
-                status.text(f"Processing {i+1}/{len(boundaries)}: {title}")
+            if st.button("🚀 Process All Chapters"):
+                chapter_docs = []
+                total_refs = 0
+                total_replacements = 0
                 
-                # Create chapter with preserved formatting
-                chapter_doc = create_chapter_document(doc, start, end)
+                progress = st.progress(0)
+                status = st.empty()
                 
-                # Process citations
-                refs, citations = process_chapter_citations(chapter_doc, fmt, delete_notes)
+                for i, (start, end, title) in enumerate(boundaries):
+                    status.text(f"Processing {i+1}/{len(boundaries)}: {title}")
+                    
+                    # Create chapter with preserved formatting
+                    chapter_doc = create_chapter_document(doc, start, end)
+                    
+                    # Process citations
+                    refs, citations = process_chapter_citations(chapter_doc, fmt, delete_notes)
+                    
+                    chapter_docs.append(chapter_doc)
+                    total_refs += refs
+                    total_replacements += citations
+                    
+                    st.write(f"✅ **{title}**: {refs} references, {citations} citations replaced")
+                    progress.progress((i + 1) / len(boundaries))
                 
-                chapter_docs.append(chapter_doc)
-                total_refs += refs
-                total_replacements += citations
+                # Save processed chapters
+                st.session_state['processed_chapters'] = {
+                    'chapter_docs': chapter_docs,
+                    'boundaries': boundaries,
+                    'stats': {'refs': total_refs, 'replacements': total_replacements}
+                }
                 
-                st.write(f"✅ **{title}**: {refs} references, {citations} citations replaced")
-                progress.progress((i + 1) / len(boundaries))
-            
-            # Save processed chapters
-            st.session_state['processed_chapters'] = {
-                'chapter_docs': chapter_docs,
-                'boundaries': boundaries,
-                'stats': {'refs': total_refs, 'replacements': total_replacements}
-            }
-            
-            status.text("✅ Processing complete!")
-            st.success(f"🎉 Processed {len(boundaries)} chapters! {total_refs} references, {total_replacements} citations replaced")
-            st.info("Proceed to Step 5 to rejoin chapters.")
-            st.info("Run: `streamlit run step5_rejoin_chapters.py`")
+                status.text("✅ Processing complete!")
+                st.success(f"🎉 Processed {len(boundaries)} chapters! {total_refs} references, {total_replacements} citations replaced")
+                st.info("Proceed to Step 5 to rejoin chapters.")
+                st.info("Run: `streamlit run step5_rejoin_chapters.py`")
+        else:
+            st.warning("⚠️ Please complete Step 3 first (Select Chapters)")
+            st.info("Run: `streamlit run step3_chapter_selection.py`")
     else:
-        st.warning("⚠️ Please complete Step 3 first (Select Chapters)")
-        st.info("Run: `streamlit run step3_chapter_selection.py`")
-else:
-    st.info("📤 Upload the same DOCX file")
-
+        st.info("📤 Upload the same DOCX file")
