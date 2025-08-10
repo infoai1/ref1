@@ -1,15 +1,6 @@
 import streamlit as st
 import re
 
-st.set_page_config(page_title="Step 3: Select Chapters", page_icon="✅")
-st.title("✅ Step 3: Select & Preview Chapters")
-
-def get_chapter_candidates():
-    """Get chapter candidates from previous step"""
-    if 'chapter_candidates' in st.session_state:
-        return st.session_state['chapter_candidates']
-    return None
-
 def create_chapter_boundaries(selected_chapters, total_paragraphs):
     """Create chapter boundaries"""
     if not selected_chapters:
@@ -33,57 +24,67 @@ def create_chapter_boundaries(selected_chapters, total_paragraphs):
     
     return boundaries
 
-uploaded = st.file_uploader("Upload your DOCX file", type=["docx"])
-candidates_data = get_chapter_candidates()
+def get_chapter_candidates():
+    """Get chapter candidates from previous step"""
+    if 'chapter_candidates' in st.session_state:
+        return st.session_state['chapter_candidates']
+    return None
 
-if uploaded and candidates_data:
-    from docx import Document
-    doc = Document(uploaded)
-    total_paragraphs = len(doc.paragraphs)
+# Only run UI code if this file is run directly
+if __name__ == "__main__":
+    st.set_page_config(page_title="Step 3: Select Chapters", page_icon="✅")
+    st.title("✅ Step 3: Select & Preview Chapters")
     
-    st.subheader(f"📋 Chapters with Font Size {candidates_data['font_size']}pt")
+    uploaded = st.file_uploader("Upload your DOCX file", type=["docx"])
+    candidates_data = get_chapter_candidates()
     
-    chapters = candidates_data['chapters']
-    
-    st.write(f"Found **{len(chapters)}** potential chapters. Select which ones to use:")
-    
-    # Let user select chapters
-    selected_indices = []
-    for i, chapter in enumerate(chapters):
-        is_selected = st.checkbox(
-            f"**Para {chapter['index']}**: {chapter['preview']}",
-            key=f"ch_{i}",
-            help=f"Full text: {chapter['text']}"
-        )
-        if is_selected:
-            selected_indices.append(i)
-    
-    if selected_indices:
-        selected_chapters = [chapters[i] for i in selected_indices]
+    if uploaded and candidates_data:
+        from docx import Document
+        doc = Document(uploaded)
+        total_paragraphs = len(doc.paragraphs)
         
-        # Show chapter boundaries
-        st.subheader("📖 Chapter Boundaries Preview")
+        st.subheader(f"📋 Chapters with Font Size {candidates_data['font_size']}pt")
         
-        boundaries = create_chapter_boundaries(selected_chapters, total_paragraphs)
+        chapters = candidates_data['chapters']
         
-        for i, (start, end, title) in enumerate(boundaries):
-            st.write(f"**{i+1:02d}. {title}**")
-            st.caption(f"Paragraphs {start} to {end} ({end-start+1} paragraphs)")
+        st.write(f"Found **{len(chapters)}** potential chapters. Select which ones to use:")
         
-        # Save for processing
-        if st.button("✅ Confirm Chapter Selection"):
-            st.session_state['final_chapters'] = {
-                'selected_chapters': selected_chapters,
-                'boundaries': boundaries,
-                'font_size': candidates_data['font_size']
-            }
-            st.success("✅ Chapters confirmed! Proceed to Step 4 for processing.")
-            st.info("Run: `streamlit run step4_citation_processing.py`")
+        # Let user select chapters
+        selected_indices = []
+        for i, chapter in enumerate(chapters):
+            is_selected = st.checkbox(
+                f"**Para {chapter['index']}**: {chapter['preview']}",
+                key=f"ch_{i}",
+                help=f"Full text: {chapter['text']}"
+            )
+            if is_selected:
+                selected_indices.append(i)
+        
+        if selected_indices:
+            selected_chapters = [chapters[i] for i in selected_indices]
+            
+            # Show chapter boundaries
+            st.subheader("📖 Chapter Boundaries Preview")
+            
+            boundaries = create_chapter_boundaries(selected_chapters, total_paragraphs)
+            
+            for i, (start, end, title) in enumerate(boundaries):
+                st.write(f"**{i+1:02d}. {title}**")
+                st.caption(f"Paragraphs {start} to {end} ({end-start+1} paragraphs)")
+            
+            # Save for processing
+            if st.button("✅ Confirm Chapter Selection"):
+                st.session_state['final_chapters'] = {
+                    'selected_chapters': selected_chapters,
+                    'boundaries': boundaries,
+                    'font_size': candidates_data['font_size']
+                }
+                st.success("✅ Chapters confirmed! Proceed to Step 4 for processing.")
+                st.info("Run: `streamlit run step4_citation_processing.py`")
+        else:
+            st.warning("Please select at least one chapter header.")
+    elif not uploaded:
+        st.info("📤 Upload your DOCX file")
     else:
-        st.warning("Please select at least one chapter header.")
-elif not uploaded:
-    st.info("📤 Upload your DOCX file")
-else:
-    st.warning("⚠️ Please complete Step 2 first (Choose Font Size)")
-    st.info("Run: `streamlit run step2_font_selection.py`")
-
+        st.warning("⚠️ Please complete Step 2 first (Choose Font Size)")
+        st.info("Run: `streamlit run step2_font_selection.py`")
